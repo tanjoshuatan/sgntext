@@ -1,1 +1,1 @@
-echo "Feel free to configure this file"
+echo "Feel free to configure this file (.bashrc)"
