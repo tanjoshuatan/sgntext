@@ -15,7 +15,6 @@
 </style>
 </head>
 <body class="h-screen overflow-hidden bg-neutral-950 text-neutral-200 antialiased">
-<!-- ^ Changed to h-screen and overflow-hidden to lock the page -->
 <div x-data="app()" x-init="init()" class="flex h-full flex-col">
 
   <!-- Global Header -->
@@ -31,7 +30,6 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0 relative">
-    <!-- ^ Added min-h-0 so the main area doesn't overflow -->
 
     <!-- ======================= LIST VIEW ======================= -->
     <div x-show="view === 'list'" class="flex-1 overflow-y-auto p-6 min-h-0">
@@ -118,25 +116,35 @@
         </div>
       </div>
 
-      <!-- Terminal Output (Added min-h-0 here) -->
+      <!-- Terminal Output -->
       <div class="flex-1 min-h-0 overflow-y-auto bg-black p-4 font-mono text-[13px] leading-relaxed" id="terminal-scroll" x-ref="terminal">
         <pre class="whitespace-pre-wrap break-all text-neutral-300" x-html="renderOutput(output) || 'Waiting for output...'"></pre>
       </div>
 
-      <!-- Command Input -->
+      <!-- Command Input Area -->
       <div class="border-t border-neutral-800 bg-neutral-900/60 p-4 shrink-0">
-        <div class="flex items-start gap-2 font-mono text-sm">
-          <span class="select-none pt-2 text-emerald-400">$</span>
+        <!-- items-start keeps the prompt pinned to the first line even if textarea grows -->
+        <div class="flex items-start gap-2 font-mono text-sm max-w-full">
+          
+          <!-- CWD next to $ -->
+          <span x-show="cwd" class="select-none pt-1.5 text-neutral-500 whitespace-nowrap truncate max-w-[40vw]" x-text="cwd"></span>
+          
+          <!-- Prompt symbol -->
+          <span class="select-none pt-1.5 text-emerald-400">$</span>
+          
+          <!-- Input -->
           <textarea x-model="commandInput" 
                     @keydown.enter.prevent="if(!$event.shiftKey) submitCommand()"
-                    rows="2"
-                    placeholder="Enter command (Shift+Enter for newline)"
+                    rows="1"
+                    placeholder="Enter command..."
                     :disabled="current.status !== 'exited' && current.status !== 'error'"
-                    class="flex-1 resize-none bg-transparent text-neutral-100 placeholder-neutral-600 outline-none disabled:opacity-40 leading-relaxed"
+                    class="flex-1 resize-none bg-transparent text-neutral-100 placeholder-neutral-600 outline-none disabled:opacity-40 leading-relaxed pt-1.5"
                     style="max-height: 20vh; overflow-y: auto;"></textarea>
+          
+          <!-- Button -->
           <button @click="submitCommand()" 
                   :disabled="current.status !== 'exited' && current.status !== 'error'"
-                  class="mt-1 rounded bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40 transition">
+                  class="mt-0.5 rounded bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40 transition">
             Run
           </button>
         </div>
@@ -154,6 +162,7 @@ function app() {
     current: null,
     output: '',
     commandInput: '',
+    cwd: '', // Tracks current working directory
     
     init() {
       this.fetchSessions();
@@ -180,10 +189,20 @@ function app() {
     renderOutput(text) {
       if (!text) return '';
       
+      // Update CWD by finding the last instance of the green prompt
+      // Prompt format: \x1b[1;32m/path/to/dir > command\x1b[0m
+      const promptRegex = /\x1b\[1;32m(.*?) > .*?\x1b\[0m/g;
+      let match;
+      let lastCwd = this.cwd || '~';
+      while ((match = promptRegex.exec(text)) !== null) {
+        lastCwd = match[1];
+      }
+      if (lastCwd !== this.cwd) this.cwd = lastCwd;
+
+      // Render colors
       const ansiRegex = /\x1b\[([0-9;]*)m/g;
       let result = '';
       let lastIndex = 0;
-      let match;
       
       while ((match = ansiRegex.exec(text)) !== null) {
         let chunk = text.slice(lastIndex, match.index);
@@ -194,11 +213,11 @@ function app() {
         for (const p of codes) {
           if (p === '1') styles.push('font-weight: bold');
           else if (p === '0') styles = [];
-          else if (p === '32') styles.push('color: #10b981');
-          else if (p === '31') styles.push('color: #ef4444');
-          else if (p === '33') styles.push('color: #f59e0b');
-          else if (p === '34') styles.push('color: #3b82f6');
-          else if (p === '36') styles.push('color: #06b6d4');
+          else if (p === '32') styles.push('color: #10b981'); // Green
+          else if (p === '31') styles.push('color: #ef4444'); // Red
+          else if (p === '33') styles.push('color: #f59e0b'); // Yellow
+          else if (p === '34') styles.push('color: #3b82f6'); // Blue
+          else if (p === '36') styles.push('color: #06b6d4'); // Cyan
         }
         
         if (styles.length) {
@@ -268,6 +287,7 @@ function app() {
       this.current = s;
       this.output = '';
       this.commandInput = '';
+      this.cwd = ''; // Reset until fetched
       this.view = 'detail';
       this.fetchOutput();
     },
@@ -290,7 +310,8 @@ function app() {
       const cmd = this.commandInput;
       this.commandInput = '';
       
-      this.output += `\n\x1b[1;32m> ${cmd.replace(/\n/g, ' ')}\x1b[0m\n`;
+      // Optimistic UI echo using the tracked CWD
+      this.output += `\n\x1b[1;32m${this.cwd || ''} > ${cmd.replace(/\n/g, ' ')}\x1b[0m\n`;
       this.scrollToBottom();
       
       try {
