@@ -14,11 +14,12 @@
   [x-cloak] { display: none !important; }
 </style>
 </head>
-<body class="h-full bg-neutral-950 text-neutral-200 antialiased">
+<body class="h-screen overflow-hidden bg-neutral-950 text-neutral-200 antialiased">
+<!-- ^ Changed to h-screen and overflow-hidden to lock the page -->
 <div x-data="app()" x-init="init()" class="flex h-full flex-col">
 
   <!-- Global Header -->
-  <header class="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900/60 px-6 py-3">
+  <header class="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900/60 px-6 py-3 shrink-0">
     <h1 class="text-lg font-bold tracking-tight text-white cursor-pointer" @click="view = 'list'">
       sgntext<span class="text-emerald-500">.</span>
     </h1>
@@ -29,10 +30,11 @@
     </div>
   </header>
 
-  <main class="flex-1 overflow-hidden relative flex flex-col">
+  <main class="flex-1 flex flex-col min-h-0 relative">
+    <!-- ^ Added min-h-0 so the main area doesn't overflow -->
 
     <!-- ======================= LIST VIEW ======================= -->
-    <div x-show="view === 'list'" class="flex-1 overflow-y-auto p-6">
+    <div x-show="view === 'list'" class="flex-1 overflow-y-auto p-6 min-h-0">
       <div x-show="sessions.length === 0" class="text-neutral-500 italic text-center mt-20">
         No workers yet. Create one to get started.
       </div>
@@ -90,9 +92,9 @@
     </div>
 
     <!-- ======================= DETAIL VIEW ======================= -->
-    <div x-show="view === 'detail'" class="flex-1 flex flex-col" x-cloak>
+    <div x-show="view === 'detail'" class="flex-1 flex flex-col min-h-0" x-cloak>
       <!-- Detail Header -->
-      <div class="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900/60 px-6 py-2">
+      <div class="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900/60 px-6 py-2 shrink-0">
         <button @click="view = 'list'; current = null; output = ''" class="rounded border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 transition">
           ← Back
         </button>
@@ -116,13 +118,13 @@
         </div>
       </div>
 
-      <!-- Terminal Output -->
-      <div class="flex-1 overflow-y-auto bg-black p-4 font-mono text-[13px] leading-relaxed" id="terminal-scroll" x-ref="terminal">
+      <!-- Terminal Output (Added min-h-0 here) -->
+      <div class="flex-1 min-h-0 overflow-y-auto bg-black p-4 font-mono text-[13px] leading-relaxed" id="terminal-scroll" x-ref="terminal">
         <pre class="whitespace-pre-wrap break-all text-neutral-300" x-html="renderOutput(output) || 'Waiting for output...'"></pre>
       </div>
 
       <!-- Command Input -->
-      <div class="border-t border-neutral-800 bg-neutral-900/60 p-4">
+      <div class="border-t border-neutral-800 bg-neutral-900/60 p-4 shrink-0">
         <div class="flex items-start gap-2 font-mono text-sm">
           <span class="select-none pt-2 text-emerald-400">$</span>
           <textarea x-model="commandInput" 
@@ -156,12 +158,10 @@ function app() {
     init() {
       this.fetchSessions();
       
-      // Poll list every 2s
       setInterval(() => {
         if (this.view === 'list') this.fetchSessions();
       }, 2000);
 
-      // Poll detail terminal every 500ms for smoother streaming
       setInterval(() => {
         if (this.view === 'detail') {
           this.fetchOutput();
@@ -180,29 +180,25 @@ function app() {
     renderOutput(text) {
       if (!text) return '';
       
-      // Match ANSI escape codes: \x1B[1;32m
       const ansiRegex = /\x1b\[([0-9;]*)m/g;
-      
       let result = '';
       let lastIndex = 0;
       let match;
       
       while ((match = ansiRegex.exec(text)) !== null) {
-        // Append escaped text before the ANSI match
         let chunk = text.slice(lastIndex, match.index);
         result += this.escapeHtml(chunk);
         
-        // Parse the ANSI codes
         const codes = match[1].split(';');
         let styles = [];
         for (const p of codes) {
           if (p === '1') styles.push('font-weight: bold');
-          else if (p === '0') styles = []; // Reset
-          else if (p === '32') styles.push('color: #10b981'); // Green
-          else if (p === '31') styles.push('color: #ef4444'); // Red
-          else if (p === '33') styles.push('color: #f59e0b'); // Yellow
-          else if (p === '34') styles.push('color: #3b82f6'); // Blue
-          else if (p === '36') styles.push('color: #06b6d4'); // Cyan
+          else if (p === '0') styles = [];
+          else if (p === '32') styles.push('color: #10b981');
+          else if (p === '31') styles.push('color: #ef4444');
+          else if (p === '33') styles.push('color: #f59e0b');
+          else if (p === '34') styles.push('color: #3b82f6');
+          else if (p === '36') styles.push('color: #06b6d4');
         }
         
         if (styles.length) {
@@ -214,10 +210,8 @@ function app() {
         lastIndex = ansiRegex.lastIndex;
       }
       
-      // Append the rest
       result += this.escapeHtml(text.slice(lastIndex));
       
-      // Auto-close any unclosed spans
       const openSpans = (result.match(/<span/g) || []).length;
       const closeSpans = (result.match(/<\/span>/g) || []).length;
       for (let i = 0; i < openSpans - closeSpans; i++) {
@@ -296,7 +290,6 @@ function app() {
       const cmd = this.commandInput;
       this.commandInput = '';
       
-      // Optimistic UI: Instantly show the prompt so the user knows it's sending
       this.output += `\n\x1b[1;32m> ${cmd.replace(/\n/g, ' ')}\x1b[0m\n`;
       this.scrollToBottom();
       
