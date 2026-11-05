@@ -31,6 +31,7 @@ def get_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     # Change this line to use DELETE mode
+    conn.execute("PRAGMA synchronous=FULL") 
     conn.execute("PRAGMA journal_mode=DELETE")
     return conn
 
@@ -71,8 +72,11 @@ def index():
 @app.get("/api/sessions")
 def list_sessions():
     db = get_db()
-    rows = db.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
-    return [dict(r) for r in rows]
+    try:
+        rows = db.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close() 
 
 @app.post("/api/sessions")
 def create_session():
