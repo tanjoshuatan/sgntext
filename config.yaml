@@ -3,3 +3,6 @@ COMMAND_ROOT: "command"
 
 # Port for the external.py web interface
 WEB_PORT: 8080
+
+# Base directory to cd to:
+BASE_DIR: "/"

@@ -32,9 +32,10 @@ def get_db(db_path: Path) -> sqlite3.Connection:
 class PersistentShell:
     """Manages a single bash process mapped to a session_id."""
 
-    def __init__(self, sid: str, out_file: Path):
+    def __init__(self, sid: str, out_file: Path, base_dir: str):
         self.sid = sid
         self.out_file = out_file
+        self.base_dir = base_dir
         self.proc = None
         self.master_fd = None
         self.reader = None
@@ -101,9 +102,16 @@ class PersistentShell:
             cmd.extend(["--rcfile", str(rc_file)])
         cmd.append("-i")
 
+        # Ensure base_dir exists before spawning
+        try:
+            os.makedirs(self.base_dir, exist_ok=True)
+        except OSError:
+            pass
+
         self.proc = subprocess.Popen(
             cmd, stdin=slave, stdout=slave, stderr=slave,
             env=env, preexec_fn=_child_setup, close_fds=True,
+            cwd=self.base_dir, # <-- Set the working directory here
         )
         os.close(slave)
         self.master_fd = os.dup(master)
@@ -135,7 +143,6 @@ class PersistentShell:
                 idx = self.buf.find(self.current_marker)
                 
                 if idx != -1:
-                    # Marker found
                     pre = self.buf[:idx]
                     if pre.endswith("\n"):
                         pre = pre[:-1]
@@ -153,12 +160,10 @@ class PersistentShell:
                         self.buf = rest[nl+1:]
                         self.current_marker = None
                         
-                        # Write any remaining text after the marker
                         if self.buf:
                             self._append_output(self.buf)
                             self.buf = ""
                 else:
-                    # No marker yet, keep a safe buffer size to avoid cutting a marker in half
                     keep = len(self.current_marker) - 1
                     if len(self.buf) > keep:
                         self._append_output(self.buf[:-keep])
@@ -200,10 +205,8 @@ class PersistentShell:
             self.exit_code = None
             self.buf = ""
             
-            # Clean up the command for the prompt display (remove newlines)
             display_cmd = cmd.replace("\n", " ").replace("'", "")
             
-            # This prompt evaluates the shell's current pwd and prints it in green!
             prompt = f"printf '\\n\\033[1;32m%s > %s\\033[0m\\n' \"$(pwd)\" '{display_cmd}'\n"
             payload = f"{prompt}{cmd}\nprintf '\\n{marker}%d\\n' $?\n"
             
@@ -261,6 +264,9 @@ async def main():
     if not command_root.is_absolute():
         command_root = HERE / command_root
     
+    # Load the base directory (defaults to "/")
+    base_dir = cfg.get("BASE_DIR", "/")
+    
     db_path = command_root / "commands.db"
     out_dir = command_root / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -281,7 +287,7 @@ async def main():
     db.commit()
 
     shells: dict[str, PersistentShell] = {}
-    log(f"Ecosystem running. DB: {db_path}")
+    log(f"Ecosystem running. DB: {db_path} | Base Dir: {base_dir}")
 
     while True:
         try:
@@ -298,7 +304,7 @@ async def main():
                 sid = row["session_id"]
                 
                 if sid not in shells:
-                    shells[sid] = PersistentShell(sid, out_dir / f"{sid}.txt")
+                    shells[sid] = PersistentShell(sid, out_dir / f"{sid}.txt", base_dir)
                     await shells[sid].start()
 
                 if row["kill_requested"] == 1:
