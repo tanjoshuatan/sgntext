@@ -6,6 +6,7 @@
 <title>sgntext | Worker Control</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'><rect width='256' height='256' rx='56' fill='%230a0a0a'/><text x='85' y='185' font-family='system-ui, -apple-system, sans-serif' font-weight='800' font-size='180' fill='%23ffffff' text-anchor='middle' letter-spacing='-4'>s</text><circle cx='185' cy='175' r='22' fill='%2310b981'/></svg>">
 <style>
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -123,7 +124,6 @@
 
       <!-- Command Input Area -->
       <div class="border-t border-neutral-800 bg-neutral-900/60 p-4 shrink-0">
-        <!-- items-start keeps the prompt pinned to the first line even if textarea grows -->
         <div class="flex items-start gap-2 font-mono text-sm max-w-full">
           
           <!-- CWD next to $ -->
@@ -135,6 +135,8 @@
           <!-- Input -->
           <textarea x-model="commandInput" 
                     @keydown.enter.prevent="if(!$event.shiftKey) submitCommand()"
+                    @keydown.up.prevent="hist(-1)"
+                    @keydown.down.prevent="hist(1)"
                     rows="1"
                     placeholder="Enter command..."
                     :disabled="current.status !== 'exited' && current.status !== 'error'"
@@ -162,7 +164,11 @@ function app() {
     current: null,
     output: '',
     commandInput: '',
-    cwd: '', // Tracks current working directory
+    cwd: '', 
+    
+    // --- History state ---
+    history: [],
+    histIdx: 0,
     
     init() {
       this.fetchSessions();
@@ -189,8 +195,7 @@ function app() {
     renderOutput(text) {
       if (!text) return '';
       
-      // Update CWD by finding the last instance of the green prompt
-      // Prompt format: \x1b[1;32m/path/to/dir > command\x1b[0m
+      // 1. Update CWD by finding the last instance of the green prompt
       const promptRegex = /\x1b\[1;32m(.*?) > .*?\x1b\[0m/g;
       let match;
       let lastCwd = this.cwd || '~';
@@ -199,13 +204,28 @@ function app() {
       }
       if (lastCwd !== this.cwd) this.cwd = lastCwd;
 
-      // Render colors
+      // 2. Clean up \r (carriage returns) and cursor movements
+      // This fixes Uvicorn cutting off at 'h'
+      let sanitizedLines = text.split('\n').map(line => {
+        // If the line has a \r, only keep what comes after the LAST \r
+        const lastR = line.lastIndexOf('\r');
+        if (lastR !== -1) {
+          line = line.substring(lastR + 1);
+        }
+        // Strip cursor movements like \x1b[1G, \x1b[2K, \x1b[?25l
+        line = line.replace(/\x1B\[\?25[lh]/g, '');
+        line = line.replace(/\x1B\[[0-9]*(A|B|C|D|E|F|G)/g, '');
+        return line;
+      });
+      let cleanText = sanitizedLines.join('\n');
+
+      // 3. Render colors
       const ansiRegex = /\x1b\[([0-9;]*)m/g;
       let result = '';
       let lastIndex = 0;
       
-      while ((match = ansiRegex.exec(text)) !== null) {
-        let chunk = text.slice(lastIndex, match.index);
+      while ((match = ansiRegex.exec(cleanText)) !== null) {
+        let chunk = cleanText.slice(lastIndex, match.index);
         result += this.escapeHtml(chunk);
         
         const codes = match[1].split(';');
@@ -229,7 +249,7 @@ function app() {
         lastIndex = ansiRegex.lastIndex;
       }
       
-      result += this.escapeHtml(text.slice(lastIndex));
+      result += this.escapeHtml(cleanText.slice(lastIndex));
       
       const openSpans = (result.match(/<span/g) || []).length;
       const closeSpans = (result.match(/<\/span>/g) || []).length;
@@ -310,6 +330,12 @@ function app() {
       const cmd = this.commandInput;
       this.commandInput = '';
       
+      // Save to history
+      if (this.history[this.history.length - 1] !== cmd) {
+        this.history.push(cmd);
+      }
+      this.histIdx = this.history.length;
+
       // Optimistic UI echo using the tracked CWD
       this.output += `\n\x1b[1;32m${this.cwd || ''} > ${cmd.replace(/\n/g, ' ')}\x1b[0m\n`;
       this.scrollToBottom();
@@ -327,6 +353,18 @@ function app() {
           this.fetchSessions();
         }
       } catch (e) { console.error(e); }
+    },
+
+    hist(dir) {
+      if (!this.history.length) return;
+      this.histIdx = Math.max(0, Math.min(this.history.length, this.histIdx + dir));
+      this.commandInput = this.histIdx >= this.history.length ? '' : this.history[this.histIdx];
+      
+      // Move cursor to the end of the textarea
+      this.$nextTick(() => {
+        const el = document.querySelector('textarea');
+        if (el) el.setSelectionRange(el.value.length, el.value.length);
+      });
     },
 
     isAtBottom() {
