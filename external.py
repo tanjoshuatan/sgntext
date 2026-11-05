@@ -27,10 +27,11 @@ app = FastAPI(title="sgntext")
 
 # ---------------------------------------------------------------- db helpers
 
-def get_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=15)
+def get_db() -> sqlite3.Connection:
+    # 1. No longer takes db_path, uses the global DB_PATH
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
-    # Change this line to use DELETE mode
+    # 2. NFS safe PRAGMAs
     conn.execute("PRAGMA synchronous=FULL") 
     conn.execute("PRAGMA journal_mode=DELETE")
     return conn
@@ -39,21 +40,24 @@ def get_db(db_path: Path) -> sqlite3.Connection:
 def init_db():
     COMMAND_ROOT.mkdir(parents=True, exist_ok=True)
     (COMMAND_ROOT / "output").mkdir(exist_ok=True)
+    
     db = get_db()
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
-            job_name TEXT,
-            current_command TEXT,
-            status TEXT,
-            exit_code INTEGER,
-            kill_requested INTEGER DEFAULT 0,
-            created_at REAL,
-            updated_at REAL
-        )
-    """)
-    db.commit()
-    db.close()
+    try:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                job_name TEXT,
+                current_command TEXT,
+                status TEXT,
+                exit_code INTEGER,
+                kill_requested INTEGER DEFAULT 0,
+                created_at REAL,
+                updated_at REAL
+            )
+        """)
+        db.commit()
+    finally:
+        db.close()
 
 # ---------------------------------------------------------------- api models
 
@@ -76,57 +80,72 @@ def list_sessions():
         rows = db.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
         return [dict(r) for r in rows]
     finally:
-        db.close() 
+        db.close()
 
 @app.post("/api/sessions")
 def create_session():
     db = get_db()
-    sid = uuid.uuid4().hex
-    job_name = f"Worker{sid[:8]}"
-    now = time.time()
-    db.execute(
-        "INSERT INTO sessions (session_id, job_name, status, created_at, updated_at) VALUES (?, ?, 'exited', ?, ?)",
-        (sid, job_name, now, now)
-    )
-    db.commit()
-    return {"session_id": sid}
+    try:
+        sid = uuid.uuid4().hex
+        job_name = f"Worker{sid[:8]}"
+        now = time.time()
+        db.execute(
+            "INSERT INTO sessions (session_id, job_name, status, created_at, updated_at) VALUES (?, ?, 'exited', ?, ?)",
+            (sid, job_name, now, now)
+        )
+        db.commit()
+        return {"session_id": sid}
+    finally:
+        db.close()
 
 @app.delete("/api/sessions/{sid}")
 def delete_session(sid: str):
     db = get_db()
-    db.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
-    db.commit()
-    return {"ok": True}
+    try:
+        db.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 @app.patch("/api/sessions/{sid}")
 def rename_session(sid: str, body: RenameRequest):
     db = get_db()
-    db.execute("UPDATE sessions SET job_name=? WHERE session_id=?", (body.job_name, sid))
-    db.commit()
-    return {"ok": True}
+    try:
+        db.execute("UPDATE sessions SET job_name=? WHERE session_id=?", (body.job_name, sid))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 @app.post("/api/sessions/{sid}/run")
 def run_command(sid: str, body: RunRequest):
     db = get_db()
-    row = db.execute("SELECT status FROM sessions WHERE session_id=?", (sid,)).fetchone()
-    if not row:
-        raise HTTPException(404, "Session not found")
-    if row["status"] not in ("exited", "error"):
-        raise HTTPException(400, "Session is busy")
-    
-    db.execute(
-        "UPDATE sessions SET current_command=?, status='requested', updated_at=? WHERE session_id=?",
-        (body.command, time.time(), sid)
-    )
-    db.commit()
-    return {"ok": True}
+    try:
+        row = db.execute("SELECT status FROM sessions WHERE session_id=?", (sid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Session not found")
+        if row["status"] not in ("exited", "error"):
+            raise HTTPException(400, "Session is busy")
+        
+        db.execute(
+            "UPDATE sessions SET current_command=?, status='requested', updated_at=? WHERE session_id=?",
+            (body.command, time.time(), sid)
+        )
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 @app.post("/api/sessions/{sid}/kill")
 def kill_command(sid: str):
     db = get_db()
-    db.execute("UPDATE sessions SET kill_requested=1 WHERE session_id=?", (sid,))
-    db.commit()
-    return {"ok": True}
+    try:
+        db.execute("UPDATE sessions SET kill_requested=1 WHERE session_id=?", (sid,))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 @app.get("/api/sessions/{sid}/output")
 def get_output(sid: str):
