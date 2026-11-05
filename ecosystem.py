@@ -22,7 +22,6 @@ def log(msg: str) -> None:
     print(f"[ecosystem] {msg}", flush=True)
 
 def get_db(db_path: Path) -> sqlite3.Connection:
-    # timeout=15 is crucial for SQLite on shared network drives (NFS)
     conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -42,10 +41,11 @@ class PersistentShell:
         self.transport = None
         self.pump_task = None
         self.lock = asyncio.Lock()
+        
         self.current_marker = None
         self.exit_code = None
+        self.buf = ""
         
-        # Initialize line count for truncation
         self._lines = 0
         if self.out_file.exists():
             try:
@@ -84,7 +84,7 @@ class PersistentShell:
             pass
 
         env = os.environ.copy()
-        env["TERM"] = "dumb"
+        env["TERM"] = "xterm-256color"
         env["PS1"] = ""
         env["PS2"] = ""
         env["PROMPT_COMMAND"] = ""
@@ -116,7 +116,6 @@ class PersistentShell:
         self.pump_task = asyncio.create_task(self._pump())
 
     async def _pump(self):
-        buf = ""
         try:
             while True:
                 try:
@@ -127,33 +126,43 @@ class PersistentShell:
                     break
                 
                 text = chunk.decode("utf-8", errors="replace")
-                self._append_output(text)
                 
                 if not self.current_marker:
+                    self._append_output(text)
                     continue
 
-                buf += text
-                idx = buf.find(self.current_marker)
-                if idx == -1:
-                    if len(buf) > len(self.current_marker):
-                        buf = buf[-len(self.current_marker):]
-                    continue
+                self.buf += text
+                idx = self.buf.find(self.current_marker)
                 
-                # Marker found. Extract exit code if possible.
-                # Marker format: \n__RELAY_DONE_...__<code>\n
-                rest = buf[idx + len(self.current_marker):]
-                nl = rest.find("\n")
-                if nl == -1:
-                    continue # Wait for newline
-                
-                code_str = rest[:nl].strip()
-                try:
-                    self.exit_code = int(code_str)
-                except ValueError:
-                    self.exit_code = -1
-
-                self.current_marker = None
-                buf = ""
+                if idx != -1:
+                    # Marker found
+                    pre = self.buf[:idx]
+                    if pre.endswith("\n"):
+                        pre = pre[:-1]
+                    self._append_output(pre)
+                    
+                    rest = self.buf[idx + len(self.current_marker):]
+                    nl = rest.find("\n")
+                    if nl != -1:
+                        code_str = rest[:nl].strip()
+                        try:
+                            self.exit_code = int(code_str)
+                        except ValueError:
+                            self.exit_code = -1
+                        
+                        self.buf = rest[nl+1:]
+                        self.current_marker = None
+                        
+                        # Write any remaining text after the marker
+                        if self.buf:
+                            self._append_output(self.buf)
+                            self.buf = ""
+                else:
+                    # No marker yet, keep a safe buffer size to avoid cutting a marker in half
+                    keep = len(self.current_marker) - 1
+                    if len(self.buf) > keep:
+                        self._append_output(self.buf[:-keep])
+                        self.buf = self.buf[-keep:]
         finally:
             pass
 
@@ -189,8 +198,14 @@ class PersistentShell:
             marker = f"__RELAY_DONE_{uuid.uuid4().hex}__"
             self.current_marker = marker
             self.exit_code = None
+            self.buf = ""
             
-            payload = f"{cmd}\nprintf '\\n{marker}%d\\n' $?\n"
+            # Escape single quotes for safe bash injection
+            escaped_cmd = cmd.replace("'", "'\\''")
+            
+            # This prompt evaluates the shell's current pwd and prints it in green!
+            prompt = f"printf '\\n\\033[1;32m%s > %s\\033[0m\\n' \"$(pwd)\" '{escaped_cmd}'\n"
+            payload = f"{prompt}{cmd}\nprintf '\\n{marker}%d\\n' $?\n"
             
             view = memoryview(payload.encode("utf-8"))
             while view:
@@ -202,7 +217,6 @@ class PersistentShell:
                 except Exception:
                     break
             
-            # Wait for the marker to be consumed by _pump
             while self.current_marker is not None:
                 await asyncio.sleep(0.1)
             
@@ -275,7 +289,6 @@ async def main():
             active_sids = set(shells.keys())
             db_sids = {r["session_id"] for r in rows}
 
-            # Clean up deleted sessions
             for sid in active_sids - db_sids:
                 log(f"Session {sid} removed. Killing shell.")
                 await shells[sid].stop()
@@ -284,18 +297,15 @@ async def main():
             for row in rows:
                 sid = row["session_id"]
                 
-                # Spawn new shell if needed
                 if sid not in shells:
                     shells[sid] = PersistentShell(sid, out_dir / f"{sid}.txt")
                     await shells[sid].start()
 
-                # Handle kill requests
                 if row["kill_requested"] == 1:
                     db.execute("UPDATE sessions SET kill_requested=0 WHERE session_id=?", (sid,))
                     db.commit()
                     await shells[sid].interrupt()
 
-                # Handle new commands
                 if row["status"] == "requested":
                     db.execute("UPDATE sessions SET status='running', updated_at=? WHERE session_id=?", (time.time(), sid))
                     db.commit()

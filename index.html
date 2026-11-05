@@ -29,7 +29,6 @@
     </div>
   </header>
 
-  <!-- Main Container -->
   <main class="flex-1 overflow-hidden relative flex flex-col">
 
     <!-- ======================= LIST VIEW ======================= -->
@@ -119,7 +118,8 @@
 
       <!-- Terminal Output -->
       <div class="flex-1 overflow-y-auto bg-black p-4 font-mono text-[13px] leading-relaxed" id="terminal-scroll" x-ref="terminal">
-        <pre class="whitespace-pre-wrap break-all text-neutral-300" x-text="output || 'Waiting for output...'"></pre>
+        <!-- Render parsed HTML instead of x-text -->
+        <pre class="whitespace-pre-wrap break-all text-neutral-300" x-html="renderOutput(output) || 'Waiting for output...'"></pre>
       </div>
 
       <!-- Command Input -->
@@ -166,6 +166,32 @@ function app() {
           });
         }
       }, 2000);
+    },
+
+    renderOutput(text) {
+      if (!text) return '';
+      // 1. Escape HTML characters to prevent XSS
+      let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      
+      // 2. Basic ANSI parser for standard terminal colors
+      const colors = {
+        '30': '#000', '31': '#ef4444', '32': '#10b981', '33': '#f59e0b', '34': '#3b82f6', '35': '#8b5cf6', '36': '#06b6d4', '37': '#fff',
+        '90': '#4b5563', '91': '#f87171', '92': '#34d399', '93': '#fbbf24', '94': '#60a5fa', '95': '#a78bfa', '96': '#22d3ee', '97': '#f3f4f6'
+      };
+      
+      // Matches \033[1;32m or \033[0m
+      html = html.replace(/\x1B\[([0-9;]*)m/g, (match, codes) => {
+        const parts = codes.split(';');
+        let styles = [];
+        for (const p of parts) {
+          if (p === '1') styles.push('font-weight: bold');
+          else if (p === '0') styles = []; 
+          else if (colors[p]) styles.push(`color: ${colors[p]}`);
+        }
+        return styles.length ? `<span style="${styles.join(';')}">` : '</span>';
+      });
+      
+      return html;
     },
 
     async fetchSessions() {
