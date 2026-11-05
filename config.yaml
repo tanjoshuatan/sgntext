@@ -1,0 +1,5 @@
+# Path to the shared command folder (can be absolute or relative)
+COMMAND_ROOT: "command"
+
+# Port for the external.py web interface
+WEB_PORT: 8080

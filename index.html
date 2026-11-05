@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sgntext | Worker Control</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+  [x-cloak] { display: none !important; }
+</style>
+</head>
+<body class="h-full bg-neutral-950 text-neutral-200 antialiased">
+<div x-data="app()" x-init="init()" class="flex h-full flex-col">
+
+  <!-- Global Header -->
+  <header class="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900/60 px-6 py-3">
+    <h1 class="text-lg font-bold tracking-tight text-white cursor-pointer" @click="view = 'list'">
+      sgntext<span class="text-emerald-500">.</span>
+    </h1>
+    <div class="ml-auto flex items-center gap-4">
+      <button @click="createSession()" class="rounded bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 transition">
+        + New Worker
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 overflow-hidden relative flex flex-col">
+
+    <!-- ======================= LIST VIEW ======================= -->
+    <div x-show="view === 'list'" class="flex-1 overflow-y-auto p-6">
+      <div x-show="sessions.length === 0" class="text-neutral-500 italic text-center mt-20">
+        No workers yet. Create one to get started.
+      </div>
+      
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="s in sessions" :key="s.session_id">
+          <div class="rounded-lg border border-neutral-800 bg-neutral-900 overflow-hidden flex flex-col hover:border-neutral-700 transition">
+            <!-- Card Header -->
+            <div class="flex items-center justify-between border-b border-neutral-800 bg-neutral-900/50 px-4 py-3">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="h-2 w-2 rounded-full" 
+                      :class="{
+                        'bg-emerald-400': s.status === 'exited',
+                        'bg-blue-400': s.status === 'running',
+                        'bg-red-500': s.status === 'error',
+                        'bg-yellow-400': s.status === 'requested'
+                      }"></span>
+                <span class="font-semibold text-white truncate cursor-pointer hover:underline" 
+                      @click="rename(s)" x-text="s.job_name"></span>
+              </div>
+              <button @click="deleteSession(s.session_id)" class="text-neutral-500 hover:text-red-400 transition" title="Delete Session">
+                🗑
+              </button>
+            </div>
+            
+            <!-- Card Body -->
+            <div class="p-4 flex-1 flex flex-col gap-2 font-mono text-sm">
+              <div class="text-neutral-400"><span class="text-neutral-500">ID:</span> <span x-text="s.session_id.slice(0,8)"></span></div>
+              <div class="text-neutral-400 truncate"><span class="text-neutral-500">CMD:</span> <span x-text="s.current_command || '(none)'" class="text-neutral-300"></span></div>
+              <div class="flex gap-4 mt-2">
+                <span class="text-xs uppercase px-1.5 py-0.5 rounded border" 
+                      :class="{
+                        'border-emerald-900 text-emerald-400 bg-emerald-950/30': s.status === 'exited',
+                        'border-blue-900 text-blue-400 bg-blue-950/30': s.status === 'running' || s.status === 'requested',
+                        'border-red-900 text-red-400 bg-red-950/30': s.status === 'error'
+                      }" x-text="s.status"></span>
+                <span x-show="s.exit_code !== null" class="text-xs text-neutral-500 pt-0.5" x-text="'exit ' + s.exit_code"></span>
+              </div>
+            </div>
+
+            <!-- Card Footer -->
+            <div class="border-t border-neutral-800 bg-neutral-900/50 px-4 py-2 flex gap-2">
+              <button @click="openSession(s)" class="flex-1 rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-700 transition">
+                Open Terminal
+              </button>
+              <button x-show="s.status === 'running' || s.status === 'requested'" 
+                      @click="killSession(s.session_id)"
+                      class="rounded border border-red-900/60 px-3 py-1.5 text-sm text-red-400 hover:bg-red-950/40 transition">
+                Kill
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ======================= DETAIL VIEW ======================= -->
+    <div x-show="view === 'detail'" class="flex-1 flex flex-col" x-cloak>
+      <!-- Detail Header -->
+      <div class="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900/60 px-6 py-2">
+        <button @click="view = 'list'; current = null; output = ''" class="rounded border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 transition">
+          ← Back
+        </button>
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-white" x-text="current.job_name"></span>
+          <span class="text-xs text-neutral-500 font-mono" x-text="'(' + current.session_id.slice(0,8) + ')'"></span>
+        </div>
+        
+        <div class="ml-auto flex items-center gap-3">
+          <span class="text-xs uppercase px-2 py-0.5 rounded border" 
+                :class="{
+                  'border-emerald-900 text-emerald-400 bg-emerald-950/30': current.status === 'exited',
+                  'border-blue-900 text-blue-400 bg-blue-950/30': current.status === 'running' || current.status === 'requested',
+                  'border-red-900 text-red-400 bg-red-950/30': current.status === 'error'
+                }" x-text="current.status"></span>
+          <button x-show="current.status === 'running' || current.status === 'requested'" 
+                  @click="killSession(current.session_id)" 
+                  class="rounded bg-red-900 px-3 py-1 text-xs font-semibold text-white hover:bg-red-800 transition">
+            Kill Command
+          </button>
+        </div>
+      </div>
+
+      <!-- Terminal Output -->
+      <div class="flex-1 overflow-y-auto bg-black p-4 font-mono text-[13px] leading-relaxed" id="terminal-scroll" x-ref="terminal">
+        <pre class="whitespace-pre-wrap break-all text-neutral-300" x-text="output || 'Waiting for output...'"></pre>
+      </div>
+
+      <!-- Command Input -->
+      <div class="border-t border-neutral-800 bg-neutral-900/60 p-4">
+        <div class="flex items-start gap-2 font-mono text-sm">
+          <span class="select-none pt-2 text-emerald-400">$</span>
+          <textarea x-model="commandInput" 
+                    @keydown.enter.prevent="if(!$event.shiftKey) submitCommand()"
+                    rows="2"
+                    placeholder="Enter command (Shift+Enter for newline)"
+                    :disabled="current.status !== 'exited' && current.status !== 'error'"
+                    class="flex-1 resize-none bg-transparent text-neutral-100 placeholder-neutral-600 outline-none disabled:opacity-40 leading-relaxed"
+                    style="max-height: 20vh; overflow-y: auto;"></textarea>
+          <button @click="submitCommand()" 
+                  :disabled="current.status !== 'exited' && current.status !== 'error'"
+                  class="mt-1 rounded bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40 transition">
+            Run
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+function app() {
+  return {
+    view: 'list',
+    sessions: [],
+    current: null,
+    output: '',
+    commandInput: '',
+    
+    init() {
+      this.fetchSessions();
+      setInterval(() => {
+        if (this.view === 'list') this.fetchSessions();
+        if (this.view === 'detail') {
+          this.fetchOutput();
+          this.fetchSessions().then(() => {
+            const updated = this.sessions.find(s => s.session_id === this.current.session_id);
+            if (updated) this.current = updated;
+          });
+        }
+      }, 2000);
+    },
+
+    async fetchSessions() {
+      try {
+        const r = await fetch('/api/sessions');
+        if (r.ok) this.sessions = await r.json();
+      } catch (e) { console.error(e); }
+    },
+
+    async createSession() {
+      try {
+        const r = await fetch('/api/sessions', { method: 'POST' });
+        if (r.ok) this.fetchSessions();
+      } catch (e) { console.error(e); }
+    },
+
+    async deleteSession(sid) {
+      if (!confirm("Delete this session and its output permanently?")) return;
+      try {
+        await fetch(`/api/sessions/${sid}`, { method: 'DELETE' });
+        this.fetchSessions();
+      } catch (e) { console.error(e); }
+    },
+
+    async rename(s) {
+      const name = prompt("Rename session:", s.job_name);
+      if (!name || name === s.job_name) return;
+      try {
+        await fetch(`/api/sessions/${s.session_id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_name: name })
+        });
+        this.fetchSessions();
+      } catch (e) { console.error(e); }
+    },
+
+    async killSession(sid) {
+      if (!confirm("Send SIGINT to this session?")) return;
+      try {
+        await fetch(`/api/sessions/${sid}/kill`, { method: 'POST' });
+        this.fetchSessions();
+      } catch (e) { console.error(e); }
+    },
+
+    openSession(s) {
+      this.current = s;
+      this.output = '';
+      this.commandInput = '';
+      this.view = 'detail';
+      this.fetchOutput();
+    },
+
+    async fetchOutput() {
+      if (!this.current) return;
+      try {
+        const r = await fetch(`/api/sessions/${this.current.session_id}/output`);
+        if (r.ok) {
+          const data = await r.json();
+          const wasAtBottom = this.isAtBottom();
+          this.output = data.output;
+          if (wasAtBottom) this.scrollToBottom();
+        }
+      } catch (e) { console.error(e); }
+    },
+
+    async submitCommand() {
+      if (!this.commandInput.trim()) return;
+      const cmd = this.commandInput;
+      this.commandInput = '';
+      
+      try {
+        const r = await fetch(`/api/sessions/${this.current.session_id}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: cmd })
+        });
+        if (!r.ok) {
+          const err = await r.json();
+          alert(err.detail || "Failed to run command");
+        } else {
+          this.fetchSessions();
+        }
+      } catch (e) { console.error(e); }
+    },
+
+    isAtBottom() {
+      const el = this.$refs.terminal;
+      if (!el) return true;
+      return (el.scrollHeight - el.scrollTop - el.clientHeight) < 40;
+    },
+    
+    scrollToBottom() {
+      this.$nextTick(() => {
+        const el = this.$refs.terminal;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    }
+  }
+}
+</script>
+</body>
+</html>
