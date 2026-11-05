@@ -28,12 +28,15 @@ app = FastAPI(title="sgntext")
 # ---------------------------------------------------------------- db helpers
 
 def get_db() -> sqlite3.Connection:
-    # 1. No longer takes db_path, uses the global DB_PATH
-    conn = sqlite3.connect(DB_PATH, timeout=15)
+    # Increase timeout to 30s so it waits for ecosystem.py to release locks
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    # 2. NFS safe PRAGMAs
+    # Force synchronous writes (NFS safe)
     conn.execute("PRAGMA synchronous=FULL") 
-    conn.execute("PRAGMA journal_mode=DELETE")
+    # Wait up to 30 seconds if the DB is locked before throwing an error
+    conn.execute("PRAGMA busy_timeout=30000")
+    
+    # REMOVED: conn.execute("PRAGMA journal_mode=DELETE")
     return conn
 
 @app.on_event("startup")

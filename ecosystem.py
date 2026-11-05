@@ -22,9 +22,10 @@ def log(msg: str) -> None:
     print(f"[ecosystem] {msg}", flush=True)
 
 def get_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=15)
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=FULL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 # ---------------------------------------------------------------- shell
@@ -272,6 +273,7 @@ async def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     db = get_db(db_path)
+    db.execute("PRAGMA journal_mode=DELETE") 
     db.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
