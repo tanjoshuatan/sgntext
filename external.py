@@ -27,10 +27,11 @@ app = FastAPI(title="sgntext")
 
 # ---------------------------------------------------------------- db helpers
 
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=15)
+def get_db(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # Change this line to use DELETE mode
+    conn.execute("PRAGMA journal_mode=DELETE")
     return conn
 
 @app.on_event("startup")
