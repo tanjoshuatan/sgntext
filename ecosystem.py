@@ -200,11 +200,11 @@ class PersistentShell:
             self.exit_code = None
             self.buf = ""
             
-            # Escape single quotes for safe bash injection
-            escaped_cmd = cmd.replace("'", "'\\''")
+            # Clean up the command for the prompt display (remove newlines)
+            display_cmd = cmd.replace("\n", " ").replace("'", "")
             
             # This prompt evaluates the shell's current pwd and prints it in green!
-            prompt = f"printf '\\n\\033[1;32m%s > %s\\033[0m\\n' \"$(pwd)\" '{escaped_cmd}'\n"
+            prompt = f"printf '\\n\\033[1;32m%s > %s\\033[0m\\n' \"$(pwd)\" '{display_cmd}'\n"
             payload = f"{prompt}{cmd}\nprintf '\\n{marker}%d\\n' $?\n"
             
             view = memoryview(payload.encode("utf-8"))

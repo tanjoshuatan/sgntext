@@ -118,7 +118,6 @@
 
       <!-- Terminal Output -->
       <div class="flex-1 overflow-y-auto bg-black p-4 font-mono text-[13px] leading-relaxed" id="terminal-scroll" x-ref="terminal">
-        <!-- Render parsed HTML instead of x-text -->
         <pre class="whitespace-pre-wrap break-all text-neutral-300" x-html="renderOutput(output) || 'Waiting for output...'"></pre>
       </div>
 
@@ -156,8 +155,14 @@ function app() {
     
     init() {
       this.fetchSessions();
+      
+      // Poll list every 2s
       setInterval(() => {
         if (this.view === 'list') this.fetchSessions();
+      }, 2000);
+
+      // Poll detail terminal every 500ms for smoother streaming
+      setInterval(() => {
         if (this.view === 'detail') {
           this.fetchOutput();
           this.fetchSessions().then(() => {
@@ -165,33 +170,61 @@ function app() {
             if (updated) this.current = updated;
           });
         }
-      }, 2000);
+      }, 500);
+    },
+
+    escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     },
 
     renderOutput(text) {
       if (!text) return '';
-      // 1. Escape HTML characters to prevent XSS
-      let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       
-      // 2. Basic ANSI parser for standard terminal colors
-      const colors = {
-        '30': '#000', '31': '#ef4444', '32': '#10b981', '33': '#f59e0b', '34': '#3b82f6', '35': '#8b5cf6', '36': '#06b6d4', '37': '#fff',
-        '90': '#4b5563', '91': '#f87171', '92': '#34d399', '93': '#fbbf24', '94': '#60a5fa', '95': '#a78bfa', '96': '#22d3ee', '97': '#f3f4f6'
-      };
+      // Match ANSI escape codes: \x1B[1;32m
+      const ansiRegex = /\x1b\[([0-9;]*)m/g;
       
-      // Matches \033[1;32m or \033[0m
-      html = html.replace(/\x1B\[([0-9;]*)m/g, (match, codes) => {
-        const parts = codes.split(';');
+      let result = '';
+      let lastIndex = 0;
+      let match;
+      
+      while ((match = ansiRegex.exec(text)) !== null) {
+        // Append escaped text before the ANSI match
+        let chunk = text.slice(lastIndex, match.index);
+        result += this.escapeHtml(chunk);
+        
+        // Parse the ANSI codes
+        const codes = match[1].split(';');
         let styles = [];
-        for (const p of parts) {
+        for (const p of codes) {
           if (p === '1') styles.push('font-weight: bold');
-          else if (p === '0') styles = []; 
-          else if (colors[p]) styles.push(`color: ${colors[p]}`);
+          else if (p === '0') styles = []; // Reset
+          else if (p === '32') styles.push('color: #10b981'); // Green
+          else if (p === '31') styles.push('color: #ef4444'); // Red
+          else if (p === '33') styles.push('color: #f59e0b'); // Yellow
+          else if (p === '34') styles.push('color: #3b82f6'); // Blue
+          else if (p === '36') styles.push('color: #06b6d4'); // Cyan
         }
-        return styles.length ? `<span style="${styles.join(';')}">` : '</span>';
-      });
+        
+        if (styles.length) {
+          result += `<span style="${styles.join(';')}">`;
+        } else {
+          result += '</span>'; 
+        }
+        
+        lastIndex = ansiRegex.lastIndex;
+      }
       
-      return html;
+      // Append the rest
+      result += this.escapeHtml(text.slice(lastIndex));
+      
+      // Auto-close any unclosed spans
+      const openSpans = (result.match(/<span/g) || []).length;
+      const closeSpans = (result.match(/<\/span>/g) || []).length;
+      for (let i = 0; i < openSpans - closeSpans; i++) {
+          result += '</span>';
+      }
+      
+      return result;
     },
 
     async fetchSessions() {
@@ -262,6 +295,10 @@ function app() {
       if (!this.commandInput.trim()) return;
       const cmd = this.commandInput;
       this.commandInput = '';
+      
+      // Optimistic UI: Instantly show the prompt so the user knows it's sending
+      this.output += `\n\x1b[1;32m> ${cmd.replace(/\n/g, ' ')}\x1b[0m\n`;
+      this.scrollToBottom();
       
       try {
         const r = await fetch(`/api/sessions/${this.current.session_id}/run`, {
